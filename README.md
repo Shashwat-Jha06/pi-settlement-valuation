@@ -211,15 +211,43 @@ high_end          = base × 1.40 × jurisdiction_factor
 
 ## MCP server
 
-The MCP server is **co-hosted** inside the FastAPI application — no separate process or port needed.
+### Do you need to start it manually?
+
+**No.** The MCP server starts automatically as part of the FastAPI backend. There is no separate process, no extra port, and no extra command. When uvicorn starts `main.py`, the MCP server is mounted at `/mcp` and is immediately ready.
 
 ```
+# Local
+http://localhost:8000/mcp
+
+# Production (Railway)
 https://your-railway-app.railway.app/mcp
 ```
 
+The MCP protocol is open and free — it costs nothing to use. All LLM inference happens via **your Groq key on your Railway server**, so there is no additional Claude/OpenAI cost regardless of which AI client connects.
+
+---
+
+### What the MCP server exposes
+
+Five tools are available to any MCP-compatible client:
+
+| Tool | Description |
+|---|---|
+| `analyze_medical_record` | **Full pipeline** — text in, everything out (injuries, ICD codes, AIS scores, settlement range, case law, demand letter) |
+| `search_icd_codes` | Look up ICD-10-CM codes by plain-language description |
+| `get_procedure_cost` | Medicare payment rates for procedures (CMS fee schedule) |
+| `calculate_settlement_range` | Settlement math from raw numbers (specials, wages, future care, AIS) |
+| `lookup_drug_reactions` | Adverse drug reactions from OpenFDA FAERS database |
+
+---
+
 ### Connecting from Claude Desktop
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+1. Open (or create) the Claude Desktop config file:
+   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+2. Add the server entry:
 
 ```json
 {
@@ -232,9 +260,38 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-### Connecting from Cursor
+3. Restart Claude Desktop. A hammer icon will appear in the bottom-left of the chat input — that shows MCP tools are connected.
 
-Add to `.cursor/mcp.json` in your workspace:
+**Testing it:** paste a medical record into Claude and ask:
+> *"Analyze this medical record and give me a full PI case valuation with a demand letter."*
+
+Claude will call `analyze_medical_record`, get back the full structured result, and summarise it for you in natural language.
+
+---
+
+### Connecting from Claude Desktop (local backend)
+
+If you are running the backend on your own machine (`localhost:8000`) and want to use it from Claude Desktop without deploying to Railway:
+
+```json
+{
+  "mcpServers": {
+    "pi-valuation-local": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+The backend must be running (`uvicorn main:app --reload --port 8000`) whenever Claude Desktop starts. Claude connects to it locally — nothing leaves your machine except the Groq API call.
+
+---
+
+### Connecting from Cursor (Agent mode)
+
+1. Open your project in Cursor
+2. Create or edit `.cursor/mcp.json` in the workspace root:
 
 ```json
 {
@@ -247,10 +304,53 @@ Add to `.cursor/mcp.json` in your workspace:
 }
 ```
 
-Then in Cursor Agent mode, Claude can call:
-> *"Analyze this medical record and give me a settlement estimate"*
+3. Open the Cursor chat panel, switch to **Agent** mode
+4. You will see the 5 tools listed under the MCP section
 
-and the agent will automatically invoke `analyze_medical_record` using Groq on your Railway server — no additional LLM cost.
+**Example prompts in Cursor Agent:**
+> *"Use the pi-valuation tool to search ICD-10 codes for 'herniated disc with radiculopathy'"*
+
+> *"Calculate a settlement range: $14,000 specials, $7,200 lost wages, $35,000 future care, AIS 3, permanent injury, California"*
+
+> *"Analyze this medical record text and generate a demand letter"* ← then paste the record
+
+---
+
+### Calling MCP tools with any HTTP client (curl / Postman)
+
+MCP Streamable HTTP uses JSON-RPC 2.0. You can call it directly:
+
+```bash
+# List available tools
+curl -X POST https://your-railway-app.railway.app/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+# Call search_icd_codes
+curl -X POST https://your-railway-app.railway.app/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "search_icd_codes",
+      "arguments": { "description": "cervical disc herniation" }
+    }
+  }'
+```
+
+---
+
+### MCP vs REST API — which to use?
+
+| | REST (`/analyze/stream`) | MCP (`/mcp`) |
+|---|---|---|
+| Best for | Human using the web UI | AI agent incorporating PI analysis into a larger task |
+| Protocol | SSE over HTTP | JSON-RPC over HTTP (MCP spec) |
+| Streaming | Yes — tokens + thoughts live | No — blocks until complete, returns JSON |
+| Auth | None (add your own) | None (add your own) |
+| Same pipeline? | Yes | Yes |
 
 ---
 
