@@ -504,8 +504,8 @@ pi-valuation/
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/pi-valuation-engine.git
-cd pi-valuation-engine/pi-valuation
+git clone https://github.com/Shashwat-Jha06/pi-settlement-valuation.git
+cd pi-settlement-valuation
 ```
 
 ### 2. Backend setup
