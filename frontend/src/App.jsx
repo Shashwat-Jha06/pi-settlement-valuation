@@ -10,7 +10,7 @@ import { useCaseAnalysis } from "./hooks/useCaseAnalysis"
 import "./App.css"
 
 export default function App() {
-  const { analyze, result, loading, error, steps } = useCaseAnalysis()
+  const { analyze, result, partialResult, loading, error, steps } = useCaseAnalysis()
   const [showSample, setShowSample] = useState(false)
 
   const SAMPLE_TEXT = `Patient: [REDACTED] | Date of Injury: January 3, 2024
@@ -31,6 +31,15 @@ Diagnoses:
 
 Lost work: 6 weeks @ $1,200/week = $7,200.`
 
+  const hasActivity = loading || result
+  const d = result || partialResult
+  const injuries     = d?.injuries      || []
+  const valuation    = d?.valuation     || {}
+  const caseOpinions = d?.case_opinions || []
+  const demandLetter = d?.demand_letter || ""
+  const parsedWages  = d?.parsed_lost_wages  || 0
+  const parsedCare   = d?.parsed_future_care || 0
+
   return (
     <div className="app-container">
       <header className="app-header">
@@ -43,63 +52,90 @@ Lost work: 6 weeks @ $1,200/week = $7,200.`
         </div>
       </header>
 
-      <main className="app-main">
-        <UploadPanel onSubmit={analyze} loading={loading} />
+      {/* ── Split workspace: left (input+pipeline) + right (analysis cards) ── */}
+      <div className={`workspace${hasActivity ? " workspace--split" : ""}`}>
 
-        <div className="sample-row">
-          <button
-            className="sample-btn"
-            type="button"
-            onClick={() => setShowSample((v) => !v)}
-          >
-            {showSample ? "Hide" : "Show"} sample test input
-          </button>
-        </div>
+        <aside className="left-panel">
+          <UploadPanel onSubmit={analyze} loading={loading} />
 
-        {showSample && (
-          <pre className="sample-box">{SAMPLE_TEXT}</pre>
-        )}
-
-        {error && (
-          <div className="error-box">
-            <strong>Error:</strong> {error}
+          <div className="sample-row">
+            <button
+              className="sample-btn"
+              type="button"
+              onClick={() => setShowSample((v) => !v)}
+            >
+              {showSample ? "Hide" : "Show"} sample test input
+            </button>
           </div>
-        )}
 
-        {/* Pipeline progress — shown while loading and kept visible (collapsed) after done */}
-        {(loading || result) && (
-          <PipelineProgress steps={steps} />
-        )}
+          {showSample && <pre className="sample-box">{SAMPLE_TEXT}</pre>}
 
-        {result && (
-          <>
-            {(result.parsed_lost_wages > 0 || result.parsed_future_care > 0) && (
-              <div className="autoparsed-banner">
-                Auto-detected from record:
-                {result.parsed_lost_wages > 0 && (
-                  <span className="autoparsed-chip">
-                    Lost wages: <strong>${result.parsed_lost_wages.toLocaleString()}</strong>
-                  </span>
-                )}
-                {result.parsed_future_care > 0 && (
-                  <span className="autoparsed-chip">
-                    Future care: <strong>${result.parsed_future_care.toLocaleString()}</strong>
-                  </span>
-                )}
+          {error && (
+            <div className="error-box"><strong>Error:</strong> {error}</div>
+          )}
+
+          {hasActivity && <PipelineProgress steps={steps} />}
+        </aside>
+
+        {hasActivity && (
+          <section className="right-panel">
+            {!d ? (
+              <div className="results-placeholder">
+                <span className="spinner large" />
+                <p>Starting pipeline…</p>
               </div>
+            ) : (
+              <>
+                {(parsedWages > 0 || parsedCare > 0) && (
+                  <div className="autoparsed-banner">
+                    Auto-detected from record:
+                    {parsedWages > 0 && (
+                      <span className="autoparsed-chip">
+                        Lost wages: <strong>${parsedWages.toLocaleString()}</strong>
+                      </span>
+                    )}
+                    {parsedCare > 0 && (
+                      <span className="autoparsed-chip">
+                        Future care: <strong>${parsedCare.toLocaleString()}</strong>
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="results-grid">
+                  {injuries.length > 0 && (
+                    <>
+                      <InjuryTimeline injuries={injuries} />
+                      <SeverityScorecard injuries={injuries} />
+                    </>
+                  )}
+                  {Object.keys(valuation).length > 0 && (
+                    <ValuationReport valuation={valuation} />
+                  )}
+                  {caseOpinions.length > 0 && (
+                    <CaseOpinions opinions={caseOpinions} />
+                  )}
+                  {/* Demand letter teaser — scroll hint */}
+                  {demandLetter && (
+                    <div className="demand-ready-hint">
+                      📄 Demand letter ready —
+                      <a href="#demand-letter-section" className="demand-ready-link">
+                        scroll down to download ↓
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </>
             )}
-            <div className="results-grid">
-              <InjuryTimeline injuries={result.injuries} />
-              <SeverityScorecard injuries={result.injuries} />
-              <ValuationReport valuation={result.valuation} />
-              {result.case_opinions?.length > 0 && (
-                <CaseOpinions opinions={result.case_opinions} />
-              )}
-              <DemandLetter letter={result.demand_letter} />
-            </div>
-          </>
+          </section>
         )}
-      </main>
+      </div>
+
+      {/* ── Full-width demand letter below both panels ── */}
+      {demandLetter && (
+        <div className="demand-full-section" id="demand-letter-section">
+          <DemandLetter letter={demandLetter} />
+        </div>
+      )}
     </div>
   )
 }

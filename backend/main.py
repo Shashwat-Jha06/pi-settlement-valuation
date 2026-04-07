@@ -22,6 +22,7 @@ if _frontend_url:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
+    allow_origin_regex=r"http://localhost:\d+",   # covers any Vite port in dev
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -111,8 +112,8 @@ def _make_initial_state(text: str, jurisdiction: str, lost_wages: float, future_
     }
 
 
-def _sanitize_for_stream(node_name: str, output: dict) -> dict:
-    """Return a compact, JSON-safe payload for each node's progress event."""
+def _summary_for_progress(node_name: str, output: dict) -> dict:
+    """Compact summary for the PipelineProgress step cards."""
     if node_name == "medical_agent":
         injuries = output.get("injuries", [])
         total_billed = sum(i.get("medical_cost_billed", 0) or 0 for i in injuries)
@@ -154,6 +155,26 @@ def _sanitize_for_stream(node_name: str, output: dict) -> dict:
             "letter_preview": letter[:200],
             "letter_length": len(letter),
         }
+    return {}
+
+
+def _data_for_results(node_name: str, output: dict) -> dict:
+    """Full data for progressive result card rendering on the frontend."""
+    if node_name == "medical_agent":
+        return {
+            "injuries": output.get("injuries", []),
+            "parsed_lost_wages": output.get("parsed_lost_wages", 0),
+            "parsed_future_care": output.get("parsed_future_care", 0),
+        }
+    if node_name == "icd_agent":
+        return {"injuries": output.get("injuries", [])}
+    if node_name == "damages_agent":
+        return {
+            "valuation": output.get("valuation", {}),
+            "case_opinions": output.get("case_opinions", []),
+        }
+    if node_name == "legal_agent":
+        return {"demand_letter": output.get("demand_letter", "")}
     return {}
 
 
@@ -233,8 +254,11 @@ async def analyze_case_stream(
             node_output = data.get(node_name, {})
             accumulated.update(node_output)
 
-            sanitized = _sanitize_for_stream(node_name, node_output)
-            payload = json.dumps({"node": node_name, "output": sanitized})
+            payload = json.dumps({
+                "node": node_name,
+                "output": _summary_for_progress(node_name, node_output),  # for PipelineProgress
+                "data":   _data_for_results(node_name, node_output),      # for result cards
+            })
             yield f"data: {payload}\n\n"
 
     return StreamingResponse(

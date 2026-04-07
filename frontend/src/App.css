@@ -23,18 +23,22 @@ body {
 }
 
 /* ─── Layout ────────────────────────────────────────────── */
-.app-container { min-height: 100vh; }
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
 
 .app-header {
   background: linear-gradient(135deg, #1e1b4b 0%, #1a1d27 100%);
   border-bottom: 1px solid var(--border);
-  padding: 24px 0;
+  padding: 18px 0;
+  flex-shrink: 0;
 }
 
 .header-content {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 0 24px;
+  max-width: 100%;
+  padding: 0 28px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -43,7 +47,7 @@ body {
 }
 
 .app-header h1 {
-  font-size: 1.8rem;
+  font-size: 1.5rem;
   font-weight: 700;
   background: linear-gradient(90deg, #a5b4fc, #818cf8);
   -webkit-background-clip: text;
@@ -53,7 +57,8 @@ body {
 
 .app-header p {
   color: var(--text-muted);
-  margin-top: 4px;
+  margin-top: 2px;
+  font-size: 0.85rem;
 }
 
 .powered-badge {
@@ -67,10 +72,149 @@ body {
   white-space: nowrap;
 }
 
-.app-main {
-  max-width: 960px;
+/* ── Workspace (the area below the header) ──────────────── */
+.workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 28px 28px 48px;
+  max-width: 820px;
   margin: 0 auto;
+  width: 100%;
+}
+
+/* When analysis starts, switch to side-by-side */
+.workspace--split {
+  max-width: 100%;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 24px;
+  padding: 24px 24px 0;
+  height: calc(100vh - 65px); /* fill remaining viewport height */
+  overflow: hidden;            /* let each panel scroll independently */
+}
+
+/* ── Left panel (input + pipeline) ──────────────────────── */
+.left-panel {
+  flex-shrink: 0;
+  width: 420px;
+  height: 100%;
+  overflow-y: auto;
+  padding-bottom: 32px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* Before split: left panel is full-width */
+.workspace:not(.workspace--split) .left-panel {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+/* ── Right panel (results) ───────────────────────────────── */
+.right-panel {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  padding-bottom: 32px;
+  border-left: 1px solid var(--border);
+  padding-left: 24px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* Placeholder shown only during the brief moment before the first node completes */
+.results-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 60%;
+  min-height: 300px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.results-placeholder p {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+/* Cards slide in as they appear */
+.results-grid > * {
+  animation: card-enter 0.3s ease-out both;
+}
+
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Full-width demand letter section below the split workspace ── */
+.demand-full-section {
+  border-top: 2px solid var(--border);
+  background: var(--bg);
   padding: 32px 24px 64px;
+  animation: card-enter 0.35s ease-out both;
+}
+
+.demand-full-section .demand-card {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* Scroll-down hint rendered inside the right panel */
+.demand-ready-hint {
+  background: rgba(74, 222, 128, 0.08);
+  border: 1px solid rgba(74, 222, 128, 0.25);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 0.82rem;
+  color: #4ade80;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  animation: card-enter 0.3s ease-out both;
+}
+
+.demand-ready-link {
+  color: #4ade80;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.demand-ready-link:hover { color: #86efac; }
+
+/* ── Responsive: stack on narrow screens ─────────────────── */
+@media (max-width: 900px) {
+  .workspace--split {
+    flex-direction: column;
+    height: auto;
+    overflow: visible;
+  }
+
+  .left-panel {
+    width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+
+  .right-panel {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding-left: 0;
+    padding-top: 24px;
+    height: auto;
+    overflow: visible;
+  }
+
+  .demand-full-section {
+    padding: 24px 16px 48px;
+  }
 }
 
 /* ─── Upload Panel ──────────────────────────────────────── */
@@ -308,7 +452,12 @@ body {
 .results-grid {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
+}
+
+/* Cards in the right panel get slightly less padding to make better use of space */
+.right-panel .card {
+  padding: 20px 22px;
 }
 
 /* ─── Cards ─────────────────────────────────────────────── */

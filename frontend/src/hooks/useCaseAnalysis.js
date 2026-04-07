@@ -42,6 +42,7 @@ function makeInitialSteps() {
 
 export function useCaseAnalysis() {
   const [result, setResult] = useState(null)
+  const [partialResult, setPartialResult] = useState(null)  // fills in as nodes complete
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [steps, setSteps] = useState(makeInitialSteps())
@@ -76,6 +77,7 @@ export function useCaseAnalysis() {
       setLoading(true)
       setError(null)
       setResult(null)
+      setPartialResult(null)
       setSteps(makeInitialSteps())
       tokenBuf.current = {}
       rafPending.current = false
@@ -173,7 +175,7 @@ export function useCaseAnalysis() {
             }
 
             // ── Node completion event ────────────────────────────────────────
-            const { node, output } = msg
+            const { node, output, data: nodeData } = msg
             const stepIdx = PIPELINE_STEPS.findIndex((s) => s.id === node)
             if (stepIdx < 0) continue
 
@@ -181,11 +183,17 @@ export function useCaseAnalysis() {
               ? ((Date.now() - startedAt[node]) / 1000).toFixed(1) + "s"
               : null
 
+            // Update PipelineProgress step card
             setSteps((prev) =>
               prev.map((s) =>
                 s.id === node ? { ...s, status: "done", output, elapsed } : s
               )
             )
+
+            // Merge node's full data into partialResult for progressive card rendering
+            if (nodeData) {
+              setPartialResult((prev) => ({ ...(prev || {}), ...nodeData }))
+            }
           }
         }
       } catch (e) {
@@ -196,5 +204,5 @@ export function useCaseAnalysis() {
     [appendToken]
   )
 
-  return { analyze, result, loading, error, steps }
+  return { analyze, result, partialResult, loading, error, steps }
 }
