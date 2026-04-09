@@ -96,8 +96,8 @@ body {
 
 /* ── Left panel (input + pipeline) ──────────────────────── */
 .left-panel {
-  flex-shrink: 0;
-  width: 420px;
+  flex: 1;                      /* equal share with right panel */
+  min-width: 0;
   height: 100%;
   overflow-y: auto;
   padding-bottom: 32px;
@@ -114,7 +114,7 @@ body {
 
 /* ── Right panel (results) ───────────────────────────────── */
 .right-panel {
-  flex: 1;
+  flex: 1;                      /* equal share with left panel */
   min-width: 0;
   height: 100%;
   overflow-y: auto;
