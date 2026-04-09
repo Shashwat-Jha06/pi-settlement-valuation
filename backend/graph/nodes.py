@@ -13,6 +13,7 @@ Every node calls _think() / _token() to emit granular progress events that the
 These helpers are no-ops when no stream is active (e.g. during /analyze calls).
 """
 import os
+import re
 import json
 import threading
 import httpx
@@ -42,6 +43,180 @@ def _token(node: str, tok: str) -> None:
     q = _thought_queues.get(threading.current_thread().ident)
     if q:
         q.put(("thought", {"type": "token", "node": node, "token": tok}))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Context Engineering — pre-processing helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Sections of a medical record that carry zero signal for PI valuation.
+# Detected by checking if the line's uppercase form contains any of these.
+_LOW_VALUE_SECTIONS = {
+    "MEDICATIONS LIST", "CURRENT MEDICATIONS", "MEDICATION RECONCILIATION",
+    "HOME MEDICATIONS", "DISCHARGE MEDICATIONS",
+    "FAMILY HISTORY", "SOCIAL HISTORY", "TOBACCO", "ALCOHOL USE",
+    "IMMUNIZATION", "IMMUNIZATIONS", "VACCINE", "VACCINATION",
+    "ALLERGY LIST", "ALLERGIES", "ADVERSE REACTIONS",
+    "REVIEW OF SYSTEMS", "ROS:",
+    "PATIENT RIGHTS", "FINANCIAL POLICY", "PRIVACY NOTICE",
+}
+
+# Boilerplate line patterns — matched against stripped lines.
+_BOILERPLATE_RE = re.compile(
+    r"(?i)^("
+    r"this (document|information|message) is (confidential|privileged|intended)|"
+    r"hipaa|health insurance portability|"
+    r"unauthorized (use|disclosure|access|distribution)|"
+    r"if you (have received|are not the intended)|"
+    r"please (destroy|discard|delete|shred|notify the sender)|"
+    r"page \d+ of \d+|"
+    r"printed (by|on|from|date):?\s*\S|"
+    r"generated (by|on):?\s*\S"
+    r")$"
+)
+_SEPARATOR_RE = re.compile(r"^[-_=*#]{4,}$")
+
+
+def _compress_medical_record(text: str) -> str:
+    """
+    Context Engineering #1 — Strip boilerplate before sending to the LLM.
+
+    Removes: HIPAA notices, page numbers, separator lines, repeated blank lines,
+    and entire low-value sections (medications lists, social/family history,
+    immunization records, allergy tables) that carry no PI valuation signal.
+    Keeps clinical findings, billing, diagnoses, and treatment narrative intact.
+    """
+    lines = text.splitlines()
+    out: list[str] = []
+    skip_section = False
+    prev_blank = False
+
+    for line in lines:
+        stripped = line.strip()
+        upper = stripped.upper()
+
+        # Detect section header (all-caps or "Title:" pattern)
+        is_header = (
+            (stripped.isupper() and 3 < len(stripped) < 80) or
+            (stripped.endswith(":") and len(stripped) < 60 and stripped[:-1].replace(" ", "").isalpha())
+        )
+
+        if is_header:
+            skip_section = any(kw in upper for kw in _LOW_VALUE_SECTIONS)
+
+        if skip_section:
+            continue
+
+        if _BOILERPLATE_RE.match(stripped) or _SEPARATOR_RE.match(stripped):
+            continue
+
+        # Collapse consecutive blank lines to one
+        if stripped == "":
+            if not prev_blank:
+                out.append("")
+            prev_blank = True
+        else:
+            prev_blank = False
+            out.append(line)
+
+    return "\n".join(out).strip()
+
+
+# Section headers that contain clinically / financially relevant PI information.
+_PRIORITY_SECTION_KEYWORDS = {
+    "ASSESSMENT", "IMPRESSION", "DIAGNOSIS", "DIAGNOSES", "CLINICAL IMPRESSION",
+    "HISTORY OF PRESENT ILLNESS", "HPI", "CHIEF COMPLAINT", "PRESENTING COMPLAINT",
+    "PHYSICAL EXAMINATION", "EXAM FINDINGS", "OBJECTIVE",
+    "PLAN", "TREATMENT", "PROCEDURE", "SURGERY", "SURGICAL",
+    "RADIOLOGY", "IMAGING", "MRI", "CT SCAN", "X-RAY", "ULTRASOUND",
+    "BILLING", "CHARGES", "CPT", "INVOICE", "BILLED", "AMOUNT DUE",
+    "PROGNOSIS", "DISCHARGE SUMMARY", "DISCHARGE DIAGNOSIS",
+    "FOLLOW UP", "FOLLOW-UP", "REFERRAL",
+    "REASON FOR VISIT", "REASON FOR CONSULTATION",
+}
+
+
+def _smart_section_extract(text: str, max_chars: int = 6000) -> str:
+    """
+    Context Engineering #4 — Dynamic section extraction for long records.
+
+    Parses the record into sections by detecting all-caps headers, then scores
+    each section as priority (clinical/financial) or low-value and assembles
+    the result up to max_chars, always fitting priority sections in first.
+    """
+    lines = text.splitlines()
+    sections: list[tuple[str, list[str]]] = []  # [(header, lines)]
+    current_header = "__preamble__"
+    current_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        is_header = (
+            (stripped.isupper() and 3 < len(stripped) < 80) or
+            (stripped.endswith(":") and len(stripped) < 60 and stripped[:-1].replace(" ", "").isalpha())
+        )
+        if is_header:
+            sections.append((current_header, current_lines))
+            current_header = stripped
+            current_lines = []
+        else:
+            current_lines.append(line)
+    sections.append((current_header, current_lines))  # last section
+
+    def _is_priority(header: str) -> bool:
+        upper = header.upper()
+        return any(kw in upper for kw in _PRIORITY_SECTION_KEYWORDS)
+
+    result_parts: list[str] = []
+    total = 0
+
+    # Pass 1: priority sections (including preamble — always keep)
+    for header, sec_lines in sections:
+        block = (header + "\n" if header != "__preamble__" else "") + "\n".join(sec_lines)
+        block = block.strip()
+        if not block:
+            continue
+        if header == "__preamble__" or _is_priority(header):
+            if total + len(block) <= max_chars:
+                result_parts.append(block)
+                total += len(block)
+
+    # Pass 2: fill remaining space with non-priority sections
+    for header, sec_lines in sections:
+        if header == "__preamble__" or _is_priority(header):
+            continue
+        block = (header + "\n") + "\n".join(sec_lines)
+        block = block.strip()
+        if block and total + len(block) <= max_chars:
+            result_parts.append(block)
+            total += len(block)
+
+    return "\n\n".join(result_parts)
+
+
+def _select_context(raw_text: str) -> tuple[str, str]:
+    """
+    Context Engineering #3/#4 — Choose the right context preparation strategy
+    based on record length, so token usage stays flat regardless of document size.
+
+    ≤ 4,000 chars  → full text as-is (short record, no processing needed)
+    ≤ 8,000 chars  → compress only (strip boilerplate + low-value sections)
+    > 8,000 chars  → compress then smart-section-extract (keeps only PI-relevant sections)
+    """
+    if len(raw_text) <= 4000:
+        return raw_text, f"full text ({len(raw_text):,} chars — short record)"
+
+    compressed = _compress_medical_record(raw_text)
+
+    if len(compressed) <= 8000:
+        return compressed, (
+            f"boilerplate-compressed ({len(raw_text):,} → {len(compressed):,} chars)"
+        )
+
+    extracted = _smart_section_extract(compressed)
+    return extracted, (
+        f"section-extracted ({len(raw_text):,} → {len(compressed):,} → {len(extracted):,} chars)"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,11 +268,14 @@ def medical_agent_node(state: CaseState) -> dict:
     from groq import Groq
     client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-    text = state["raw_text"][:12000]
     retry_count = state.get("retry_count", 0)
     errors = list(state.get("errors", []))
 
-    _think("medical_agent", f"Medical record received — {len(text):,} characters")
+    # Context Engineering: compress + dynamically select relevant sections
+    text, ctx_strategy = _select_context(state["raw_text"])
+
+    _think("medical_agent", f"Medical record received — {len(state['raw_text']):,} characters")
+    _think("medical_agent", f"Context strategy: {ctx_strategy}")
     _think("medical_agent", "Building extraction prompt (injuries + financials)…")
 
     try:

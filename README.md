@@ -17,15 +17,16 @@
 2. [Live demo architecture](#live-demo-architecture)
 3. [Full capabilities](#full-capabilities)
 4. [Pipeline — step by step](#pipeline--step-by-step)
-5. [MCP server](#mcp-server)
-6. [APIs used](#apis-used)
-7. [Tech stack](#tech-stack)
-8. [Project structure](#project-structure)
-9. [Local development](#local-development)
-10. [Deploying to production](#deploying-to-production)
-11. [Environment variables](#environment-variables)
-12. [Sample test input](#sample-test-input)
-13. [Free-tier limits](#free-tier-limits)
+5. [Context engineering](#context-engineering)
+6. [MCP server](#mcp-server)
+7. [APIs used](#apis-used)
+8. [Tech stack](#tech-stack)
+9. [Project structure](#project-structure)
+10. [Local development](#local-development)
+11. [Deploying to production](#deploying-to-production)
+12. [Environment variables](#environment-variables)
+13. [Sample test input](#sample-test-input)
+14. [Free-tier limits](#free-tier-limits)
 
 ---
 
@@ -206,6 +207,86 @@ high_end          = base × 1.40 × jurisdiction_factor
 - **Output:** `demand_letter` — formatted letter with injuries narrative, damages table, and settlement demand
 
 **Thought log emits:** injury count → total demand → "Querying Groq [streaming]" → letter tokens → char count
+
+---
+
+## Context engineering
+
+Context engineering is the practice of deliberately shaping *what goes into the LLM's context window* — not just the prompt wording, but which information is present, in what order, and at what density. This project applies five concrete techniques across its two LLM calls.
+
+---
+
+### Technique 1 — Boilerplate compression (`_compress_medical_record`)
+
+**Problem:** Real medical records are 30–50% noise — HIPAA notices, page headers, separator lines, address blocks, and irrelevant section boilerplate.
+
+**Solution:** Before sending any text to the LLM, `_compress_medical_record()` strips:
+- HIPAA/confidentiality notice lines (regex matched)
+- Page numbers and `"Printed by / Generated on"` footers
+- Separator lines (`----`, `====`, `****`)
+- Consecutive blank lines (collapsed to one)
+- Entire low-value sections: **MEDICATIONS LIST**, **FAMILY HISTORY**, **SOCIAL HISTORY**, **IMMUNIZATIONS**, **ALLERGY LIST**, **REVIEW OF SYSTEMS** — none of which matter for PI valuation
+
+**Result:** The LLM receives a record that is 20–40% shorter with the same clinical signal, reducing token cost and improving extraction accuracy.
+
+---
+
+### Technique 2 — Dynamic context selection (`_select_context`)
+
+**Problem:** A hard character slice is naive — it cuts mid-sentence on long records and wastes tokens on very short ones.
+
+**Solution:** `_select_context()` applies a three-tier strategy based on record length after compression:
+
+| Record length (after compression) | Strategy | What the LLM receives |
+|---|---|---|
+| ≤ 4,000 chars | **Full text** | Entire record unchanged |
+| ≤ 8,000 chars | **Compress only** | Boilerplate stripped, full clinical content |
+| > 8,000 chars | **Smart section extract** | Only PI-relevant sections, up to 6,000 chars |
+
+The thought log in the UI shows which strategy was applied and the exact character counts at each stage (e.g. `"Context strategy: section-extracted (18,240 → 11,100 → 5,980 chars)"`).
+
+---
+
+### Technique 3 — Smart section extraction (`_smart_section_extract`)
+
+**Problem:** Long records have many sections; only a subset matters for PI analysis.
+
+**Solution:** For records that are still long after compression, `_smart_section_extract()` parses the document into sections by detecting all-caps headers, then scores each section:
+
+**Priority sections (always included first):**
+`ASSESSMENT` · `IMPRESSION` · `DIAGNOSES` · `HPI` · `CHIEF COMPLAINT` · `PLAN` · `TREATMENT` · `SURGERY` · `RADIOLOGY` · `MRI` · `IMAGING` · `BILLING` · `CHARGES` · `PROGNOSIS` · `DISCHARGE SUMMARY`
+
+**Low-priority sections** (filled in only if space remains up to 6,000 chars): subjective findings, nursing notes, vital signs, etc.
+
+Token usage stays flat at ≈6,000 chars regardless of how long the original PDF was.
+
+---
+
+### Technique 4 — Few-shot example in extraction prompt
+
+**Problem:** Even with a clear schema, LLMs occasionally produce malformed JSON, wrong field names, or markdown-fenced responses.
+
+**Solution:** A single worked example is embedded directly in the `EXTRACT_SYSTEM` prompt between `--- EXAMPLE ---` delimiters, showing a short clinical note mapped to the exact expected JSON output with correct field names and number parsing. The LLM mirrors the demonstrated format without re-inferring the schema, eliminating virtually all JSON parse errors on the first attempt.
+
+---
+
+### Technique 5 — Case law context injection into demand letter
+
+**Problem:** The demand letter was generated purely from injury data and damages numbers — with no awareness of how courts in the same jurisdiction have ruled on similar cases.
+
+**Solution:** After `damages_agent` retrieves opinions from CourtListener, `legal_agent` now receives them in its prompt under a `RELEVANT CASE LAW` block. The LLM references these naturally in the letter body, producing a demand letter that cites real precedent. If CourtListener returns nothing, the block is absent and the letter generates as before — zero risk of breakage.
+
+---
+
+### Summary
+
+| # | Technique | Where applied | Benefit |
+|---|---|---|---|
+| 1 | Boilerplate compression | Before `medical_agent` LLM call | 20–40% fewer tokens, cleaner extraction |
+| 2 | Dynamic context selection | Before `medical_agent` LLM call | Flat token cost regardless of PDF length |
+| 3 | Smart section extraction | Before `medical_agent` LLM call (long records) | Only PI-relevant sections reach the LLM |
+| 4 | Few-shot example in system prompt | `medical_agent` system prompt | Near-zero JSON parse errors |
+| 5 | Case law context injection | `legal_agent` prompt | Demand letters cite real court precedent |
 
 ---
 
