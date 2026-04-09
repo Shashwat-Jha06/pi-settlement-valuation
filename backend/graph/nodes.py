@@ -77,7 +77,15 @@ Rules:
 - For lost_wages: parse expressions like "6 weeks @ $1,200/week" → 7200, or "$7,200 lost wages" → 7200.
 - For future_care: parse expressions like "estimated cost: $35,000" for recommended future procedures.
 - Extract every diagnosis, procedure, and treatment event.
-- medical_cost_billed is for PAST billed costs only, not future estimates."""
+- medical_cost_billed is for PAST billed costs only, not future estimates.
+
+--- EXAMPLE ---
+INPUT:
+Patient presents after rear-end MVA. MRI lumbar spine: disc herniation L4-L5. ER visit 03/12/2023 billed $5,200. Physical therapy 8 sessions @ $175/session = $1,400. Out of work 3 weeks @ $900/week = $2,700. Future surgery estimated $28,000.
+
+OUTPUT:
+{"injuries":[{"event_type":"diagnosis","description":"Lumbar disc herniation L4-L5","body_part":"lumbar spine","date":null,"severity_indicator":"moderate","permanent":false,"medical_cost_billed":0},{"event_type":"treatment","description":"Emergency room evaluation following MVA","body_part":"multiple","date":"2023-03-12","severity_indicator":"moderate","permanent":false,"medical_cost_billed":5200},{"event_type":"therapy","description":"Physical therapy for lumbar disc herniation","body_part":"lumbar spine","date":null,"severity_indicator":"minor","permanent":false,"medical_cost_billed":1400}],"financials":{"lost_wages":2700,"future_care":28000}}
+--- END EXAMPLE ---"""
 
 
 def medical_agent_node(state: CaseState) -> dict:
@@ -331,6 +339,7 @@ def legal_agent_node(state: CaseState) -> dict:
 
     injuries = state.get("injuries", [])
     valuation = state.get("valuation", {})
+    case_opinions = state.get("case_opinions", [])
 
     diagnoses = [
         f"- {i['description']} "
@@ -341,8 +350,28 @@ def legal_agent_node(state: CaseState) -> dict:
     ]
     injury_block = "\n".join(diagnoses) if diagnoses else "See attached medical records."
 
+    # Build case law context block — only include cases that have a useful snippet
+    case_law_lines = []
+    for op in case_opinions:
+        name = op.get("case_name", "").strip()
+        snippet = (op.get("snippet") or "").strip()[:200]
+        year = (op.get("date") or "")[:4]
+        court = (op.get("court") or "").strip()
+        if name and snippet:
+            line = f"- {name}"
+            if year:
+                line += f" ({year})"
+            if court:
+                line += f", {court}"
+            line += f": {snippet}"
+            case_law_lines.append(line)
+
+    case_law_block = "\n".join(case_law_lines) if case_law_lines else ""
+
     _think("legal_agent", f"Composing demand letter — {len(diagnoses)} diagnosed injur{'y' if len(diagnoses) == 1 else 'ies'}")
     _think("legal_agent", f"Total demand amount: ${valuation.get('high_end', 0):,.0f}")
+    if case_law_block:
+        _think("legal_agent", f"Injecting {len(case_law_lines)} case law citation(s) into context")
     _think("legal_agent", "Building prompt with injuries + damages table…")
 
     prompt = f"""Write a professional personal injury demand letter using these case facts.
@@ -357,7 +386,10 @@ DAMAGES:
 - Future medical care: ${valuation.get('future_care', 0):,}
 - Pain & suffering (multiplier {valuation.get('multiplier', 1.5)}x): ${valuation.get('non_economic_damages', 0):,}
 - TOTAL SETTLEMENT DEMAND: ${valuation.get('high_end', 0):,}
-
+{f"""
+RELEVANT CASE LAW (reference naturally where appropriate in the letter):
+{case_law_block}
+""" if case_law_block else ""}
 Use [PLAINTIFF NAME], [DEFENDANT NAME], [PLAINTIFF ATTORNEY] as placeholders.
 Include: introduction paragraph, injuries and treatment narrative, damages breakdown table,
 demand paragraph, and closing.
