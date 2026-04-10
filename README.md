@@ -1,5 +1,5 @@
-# PI Case Valuation Engine
-
+# PI Case Valuation Engine 
+🔗 **[Live Demo]([https://pi-settlement-valuation.vercel.app/])**
 > **Intelligent personal-injury case analysis powered by a 4-node LangGraph multi-agent pipeline and Groq's free LLM tier.**
 > Upload a medical record → watch every reasoning step in real time → receive an ICD-coded injury timeline, a three-tier settlement estimate, comparable case law, and a download-ready demand letter (PDF / Word / TXT).
 
